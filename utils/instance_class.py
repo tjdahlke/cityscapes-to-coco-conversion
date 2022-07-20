@@ -18,7 +18,7 @@ class Instance(object):
         self.pixelCount = int(self.getInstancePixels(imgNp, instID))
 
     def getLabelID(self, instID):
-        if (instID < 1000):
+        if (instID < 1000): # Number format is: CCIII, where the 'C' digits indicate class ID number, and the 'I' digits indicate the instance ID number. Some annotations only have CC, thus the <1000 threshold used here.
             return instID
         else:
             return int(instID / 1000)

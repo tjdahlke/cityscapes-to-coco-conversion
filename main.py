@@ -49,6 +49,56 @@ def findContours(*args, **kwargs):
 
     return contours, hierarchy
 
+
+def anyClass2dict_with_polygons(imageFileList, verbose=False):
+    imgCount     = 0
+    instanceDict = {}
+
+    if not isinstance(imageFileList, list):
+        imageFileList = [imageFileList]
+
+    if verbose:
+        print("Processing {} images...".format(len(imageFileList)))
+
+    for imageFileName in imageFileList:
+        # Load image
+        img = Image.open(imageFileName)
+
+        # Image as numpy array
+        imgNp = np.array(img)
+
+        # Initialize label categories
+        instances = {}
+        for label in labels:
+            instances[label.name] = []
+
+        # Loop through all instance ids in instance image
+        for instanceId in np.unique(imgNp):
+
+            instanceObj = Instance(imgNp, instanceId)
+            instanceObj_dict = instanceObj.toDict()
+
+            mask = (imgNp == instanceId).astype(np.uint8)
+            contour, hier = findContours(
+                mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+
+            polygons = [c.reshape(-1).tolist() for c in contour]
+            instanceObj_dict['contours'] = polygons
+
+            instances[id2label[instanceObj.labelID].name].append(instanceObj_dict)
+
+        instanceDict[imageFileName] = instances
+        imgCount += 1
+
+        if verbose:
+            print("\rImages Processed: {}".format(imgCount), end=' ')
+            sys.stdout.flush()
+
+    if verbose:
+        print("")
+
+    return instanceDict
+
 def instances2dict_with_polygons(imageFileList, verbose=False):
     imgCount     = 0
     instanceDict = {}
@@ -100,7 +150,7 @@ def instances2dict_with_polygons(imageFileList, verbose=False):
 
     return instanceDict
 
-def poly_to_box(poly):
+def polys_to_box(poly):
     """Convert a polygon into a tight bounding box."""
     x0 = min(min(p[::2]) for p in poly)
     x1 = max(max(p[::2]) for p in poly)
@@ -142,8 +192,19 @@ def convert_cityscapes_instance_only(data_dir, out_dir):
         'bus',
         'train',
         'motorcycle',
-        'bicycle',
+        'bicycle'
     ]
+
+    category_to_convert = [
+        'motorcycle',
+        'traffic light',
+        'polegroup',
+        'pole',
+        'guard rail',
+        'traffic sign',
+        'license plate'
+    ]
+
 
     for data_set, ann_dir in zip(sets, ann_dirs):
         print('Starting %s' % data_set)
@@ -173,40 +234,70 @@ def convert_cityscapes_instance_only(data_dir, out_dir):
                     images.append(image)
 
                     fullname = os.path.join(root, image['seg_file_name'])
-                    objects = instances2dict_with_polygons([fullname], verbose=False)[fullname]
+                    objects = anyClass2dict_with_polygons([fullname], verbose=False)[fullname]
 
                     for object_cls in objects:
-                        if object_cls not in category_instancesonly:
-                            continue  # skip non-instance categories
+
+                        if object_cls not in category_to_convert:
+                            continue  # skip non-interesting categories
 
                         for obj in objects[object_cls]:
                             if obj['contours'] == []:
-                                print('Warning: empty contours.')
-                                continue  # skip non-instance categories
+                                    print('Warning: empty contours.')
+                                    continue  # skip non-instance categories
 
-                            len_p = [len(p) for p in obj['contours']]
-                            if min(len_p) <= 4:
-                                print('Warning: invalid contours.')
-                                continue  # skip non-instance categories
+                            if object_cls in category_instancesonly:
 
-                            ann = {}
-                            ann['id'] = ann_id
-                            ann_id += 1
-                            ann['image_id'] = image['id']
-                            ann['segmentation'] = obj['contours']
+                                len_p = [len(p) for p in obj['contours']]
+                                if min(len_p) <= 4:
+                                    print('Warning: invalid contours.')
+                                    continue  # skip non-instance categories
 
-                            if object_cls not in category_dict:
-                                category_dict[object_cls] = cat_id
-                                cat_id += 1
-                            ann['category_id'] = category_dict[object_cls]
-                            ann['iscrowd'] = 0
-                            ann['area'] = obj['pixelCount']
+                                ann = {}
+                                ann['id'] = ann_id
+                                ann_id += 1
+                                ann['image_id'] = image['id']
+                                ann['segmentation'] = obj['contours']
 
-                            xyxy_box = poly_to_box(ann['segmentation'])
-                            xywh_box = xyxy_to_xywh(xyxy_box)
-                            ann['bbox'] = xywh_box
+                                if object_cls not in category_dict:
+                                    category_dict[object_cls] = cat_id
+                                    cat_id += 1
+                                ann['category_id'] = category_dict[object_cls]
+                                ann['iscrowd'] = 0
+                                ann['area'] = obj['pixelCount']
 
-                            annotations.append(ann)
+                                xyxy_box = polys_to_box(ann['segmentation'])
+                                xywh_box = xyxy_to_xywh(xyxy_box)
+                                ann['bbox'] = xywh_box
+
+                                annotations.append(ann)
+                                
+                            # Here we take the single "pole" or "traffic sign" object, and treat each separate polygon like a new instance. This is roughly right most of the time, but sometime a single object is obstructed and gets broken into two polygons. In that case, our approximation fails.
+                            else:
+                                
+                                for poly in obj['contours']:
+                                    if len(poly) <= 4: # Not sure why, but if length 4 causes issues with utils.py", line 520, in annToRLE
+                                        print('Warning: invalid contour for this polygon (length: ', len(poly)," ). Class: ", object_cls)
+                                        continue  # skip non-instance categories
+
+                                    ann = {}
+                                    ann['id'] = ann_id
+                                    ann_id += 1
+                                    ann['image_id'] = image['id']
+                                    ann['segmentation'] = [poly] # TODO: Make this a np.array instead of a list? Breaks something in visualizations
+
+                                    if object_cls not in category_dict:
+                                        category_dict[object_cls] = cat_id
+                                        cat_id += 1
+                                    ann['category_id'] = category_dict[object_cls]
+                                    ann['iscrowd'] = 0
+                                    ann['area'] = obj['pixelCount']
+
+                                    xyxy_box = polys_to_box(ann['segmentation'])
+                                    xywh_box = xyxy_to_xywh(xyxy_box)
+                                    ann['bbox'] = xywh_box
+
+                                    annotations.append(ann)
 
         ann_dict['images'] = images
         categories = [{"id": category_dict[name], "name": name} for name in category_dict]
