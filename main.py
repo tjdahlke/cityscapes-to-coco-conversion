@@ -196,7 +196,6 @@ def convert_cityscapes_instance_only(data_dir, out_dir):
     ]
 
     category_to_convert = [
-        'motorcycle',
         'traffic light',
         'polegroup',
         'pole',
@@ -204,7 +203,6 @@ def convert_cityscapes_instance_only(data_dir, out_dir):
         'traffic sign',
         'license plate'
     ]
-
 
     for data_set, ann_dir in zip(sets, ann_dirs):
         print('Starting %s' % data_set)
